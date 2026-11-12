@@ -2,7 +2,7 @@
 
 An interactive map of all 286 charter schools operating in New York City, based on NYSED's October 2026 list.
 
-**Live map:** [link to GitHub Pages site]
+**Live map:** https://osheenk1999.github.io/nyc-charter-schools-map/
 
 ## Overview
 
