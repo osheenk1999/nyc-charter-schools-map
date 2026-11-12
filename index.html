@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NYC Charter Schools Map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    color: #1f2328;
+    background: #fff;
+    display: flex;
+  }
+  #panel {
+    width: 340px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid #d0d7de;
+    height: 100vh;
+  }
+  #panel header { padding: 16px 16px 8px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #59636e; margin: 0; line-height: 1.4; }
+  .controls { padding: 8px 16px; display: grid; gap: 8px; }
+  input, select {
+    font: inherit;
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #d0d7de;
+    border-radius: 4px;
+    background: #fff;
+  }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .count { padding: 4px 16px 8px; color: #59636e; border-bottom: 1px solid #d0d7de; }
+  .count b { color: #1f2328; }
+  #list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
+  #list li { padding: 8px 16px; border-bottom: 1px solid #eaeef2; cursor: pointer; }
+  #list li:hover { background: #f6f8fa; }
+  #list .name { font-weight: 600; }
+  #list .meta { color: #59636e; font-size: 12px; margin-top: 2px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+  footer { padding: 8px 16px; font-size: 12px; color: #59636e; border-top: 1px solid #d0d7de; line-height: 1.4; }
+  footer a { color: inherit; }
+  #map { flex: 1; height: 100vh; }
+  .legend { background: #fff; padding: 6px 10px; border: 1px solid #d0d7de; border-radius: 4px; font-size: 12px; line-height: 1.6; }
+  .popup h3 { font-size: 14px; margin: 0 0 4px; }
+  .popup p { margin: 0 0 2px; color: #59636e; }
+  .popup .school + .school { border-top: 1px solid #eaeef2; margin-top: 8px; padding-top: 8px; }
+  @media (max-width: 720px) {
+    body { flex-direction: column; }
+    #panel { width: 100%; height: auto; border-right: 0; border-bottom: 1px solid #d0d7de; }
+    #list { max-height: 30vh; }
+    #map { height: 60vh; flex: none; }
+  }
+</style>
+</head>
+<body>
+<div id="panel">
+  <header>
+    <h1>NYC Charter Schools</h1>
+    <p class="sub">All 286 charter schools on NYSED's list for the 2026-27 school year. Success Academy is mapped by campus. All other schools are mapped at one address each.</p>
+  </header>
+  <div class="controls">
+    <input id="search" type="search" placeholder="Search by school name or address">
+    <div class="row">
+      <select id="borough"><option value="">All boroughs</option></select>
+      <select id="network"><option value="">All networks</option></select>
+    </div>
+  </div>
+  <div class="count" id="count"></div>
+  <ul id="list"></ul>
+  <footer>
+    School list: <a href="https://www.nysed.gov/charter-schools/facts-about-charter-schools-new-york-state" target="_blank">NYSED</a> (Oct 2026).
+    Locations: <a href="https://nces.ed.gov/programs/edge/Geographic/SchoolLocations" target="_blank">NCES</a> and <a href="https://geosearch.planninglabs.nyc" target="_blank">NYC Geosearch</a>.
+    Success Academy campuses: <a href="https://www.successacademies.org/locations/" target="_blank">successacademies.org</a> (Nov 2026).
+    <span id="status"></span>
+  </footer>
+</div>
+<div id="map"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="schools.js"></script>
+<script src="sa_campuses.js"></script>
+<script>
+const SA_COLOR = "#e8590c";
+const OTHER_COLOR = "#2f6fb0";
+const NCES_URL = "https://nces.ed.gov/opengis/rest/services/K12_School_Locations/EDGE_ADMINDATA_PUBLICSCH_2425/MapServer/1/query";
+
+const map = L.map("map", { zoomControl: true }).setView([40.72, -73.94], 11);
+const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/";
+L.tileLayer(ESRI + "World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
+  attribution: "Tiles &copy; Esri, HERE, Garmin, &copy; OpenStreetMap contributors",
+  maxZoom: 16
+}).addTo(map);
+L.tileLayer(ESRI + "World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}", { maxZoom: 16 }).addTo(map);
+
+const legend = L.control({ position: "bottomright" });
+legend.onAdd = () => {
+  const div = L.DomUtil.create("div", "legend");
+  div.innerHTML = `<span class="dot" style="background:${SA_COLOR}"></span>Success Academy campus<br>` +
+                  `<span class="dot" style="background:${OTHER_COLOR}"></span>Other charter school`;
+  return div;
+};
+legend.addTo(map);
+
+const layer = L.layerGroup().addTo(map);
+const els = {
+  search: document.getElementById("search"),
+  borough: document.getElementById("borough"),
+  network: document.getElementById("network"),
+  count: document.getElementById("count"),
+  list: document.getElementById("list"),
+  status: document.getElementById("status")
+};
+
+function fillSelect(select, values) {
+  values.forEach(v => select.add(new Option(v, v)));
+}
+fillSelect(els.borough, [...new Set(SCHOOLS.map(s => s.bo))].sort());
+const networks = Object.entries(SCHOOLS.reduce((acc, s) => {
+  if (s.net) acc[s.net] = (acc[s.net] || 0) + 1;
+  return acc;
+}, {})).sort((a, b) => b[1] - a[1]).map(([n]) => n);
+fillSelect(els.network, [...networks, "Other / independent"]);
+
+function isSA(s) { return s.net === "Success Academy"; }
+
+// Success Academy's 38 charters are drawn as their campuses instead of one point per charter.
+const SA_CHARTER_COUNT = SCHOOLS.filter(isSA).length;
+SA_CAMPUSES.forEach(c => { c.net = "Success Academy"; c.campus = true; });
+const ITEMS = () => SCHOOLS.filter(s => !isSA(s)).concat(SA_CAMPUSES);
+
+function schoolHtml(s) {
+  if (s.campus) {
+    return `<div class="school">
+      <h3>${s.n}</h3>
+      <p>${s.a}, ${s.bo} ${s.z}</p>
+      <p>Grades ${s.g} · ${s.lvl} campus</p>
+    </div>`;
+  }
+  const bits = [s.g ? `Grades ${s.g}` : null, s.e ? `${s.e.toLocaleString()} students` : null].filter(Boolean).join(" · ");
+  return `<div class="school">
+    <h3>${s.n}</h3>
+    <p>${s.a}, ${s.bo} ${s.z}</p>
+    ${bits ? `<p>${bits}</p>` : ""}
+    <p>Opened ${s.o} · District ${s.d} · Authorizer: ${s.au}</p>
+  </div>`;
+}
+
+function matches(s) {
+  const q = els.search.value.trim().toLowerCase();
+  if (q && !(s.n.toLowerCase().includes(q) || s.a.toLowerCase().includes(q) || s.z.includes(q))) return false;
+  if (els.borough.value && s.bo !== els.borough.value) return false;
+  const net = els.network.value;
+  if (net === "Other / independent" && s.net) return false;
+  if (net && net !== "Other / independent" && s.net !== net) return false;
+  return true;
+}
+
+let markerByKey = {};
+
+function render() {
+  layer.clearLayers();
+  markerByKey = {};
+  const shown = ITEMS().filter(matches);
+
+  // Several charters often share one building, so group by location.
+  const groups = {};
+  shown.forEach(s => {
+    const key = s.y.toFixed(4) + "," + s.x.toFixed(4);
+    (groups[key] = groups[key] || []).push(s);
+  });
+  Object.entries(groups).forEach(([key, group]) => {
+    const anySA = group.some(s => s.campus);
+    const m = L.circleMarker([group[0].y, group[0].x], {
+      radius: group.length > 1 ? 7 : 5,
+      color: "#fff",
+      weight: 1,
+      fillColor: anySA ? SA_COLOR : OTHER_COLOR,
+      fillOpacity: 0.9
+    }).bindPopup(`<div class="popup">${group.map(schoolHtml).join("")}</div>`, { maxWidth: 280 });
+    m.addTo(layer);
+    if (anySA) m.bringToFront();
+    markerByKey[key] = m;
+  });
+
+  const nSchools = shown.filter(s => !s.campus).length;
+  const nCampuses = shown.filter(s => s.campus).length;
+  const parts = [];
+  if (nSchools || !nCampuses) parts.push(`<b>${nSchools}</b> charter schools`);
+  if (nCampuses) parts.push(`<b>${nCampuses}</b> Success Academy campuses`);
+  els.count.innerHTML = parts.join(" · ") +
+    (nCampuses ? `<br>Success Academy's ${SA_CHARTER_COUNT} charters are shown as their campuses.` : "");
+
+  els.list.innerHTML = "";
+  shown.slice().sort((a, b) => a.n.localeCompare(b.n)).forEach(s => {
+    const li = document.createElement("li");
+    li.innerHTML = `<div class="name"><span class="dot" style="background:${s.campus ? SA_COLOR : OTHER_COLOR}"></span>${s.n}</div>
+                    <div class="meta">${s.a}, ${s.bo}${s.g ? " · Grades " + s.g : ""}</div>`;
+    li.onclick = () => {
+      const m = markerByKey[s.y.toFixed(4) + "," + s.x.toFixed(4)];
+      map.setView([s.y, s.x], 16);
+      m.openPopup();
+    };
+    els.list.appendChild(li);
+  });
+}
+
+[els.search, els.borough, els.network].forEach(el => el.addEventListener("input", render));
+render();
+
+// Refresh addresses and enrollment from the NCES API. If the call fails or is slow,
+// the map keeps the saved copy in schools.js.
+async function refreshFromNces() {
+  const where = "LSTATE='NY' AND CHARTER_TEXT='Yes' AND CNTY IN ('36005','36047','36061','36081','36085')";
+  const params = new URLSearchParams({
+    where,
+    outFields: "ST_LEAID,LSTREET1,LZIP,TOTAL,LATCOD,LONCOD",
+    f: "json",
+    resultRecordCount: "2000"
+  });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
+  try {
+    const res = await fetch(`${NCES_URL}?${params}`, { signal: ctrl.signal });
+    const data = await res.json();
+    const rows = (data.features || []).map(f => f.attributes);
+    if (rows.length < 200) throw new Error("unexpected response");
+
+    // NCES uses the state BEDS code as its state ID. A few schools are filed under a
+    // different district prefix, so fall back to the last six digits when unique.
+    const byFull = {}, byLast6 = {};
+    rows.forEach(r => {
+      const beds = r.ST_LEAID.replace("NY-", "");
+      byFull[beds] = r;
+      (byLast6[beds.slice(-6)] = byLast6[beds.slice(-6)] || []).push(r);
+    });
+    SCHOOLS.forEach(s => {
+      if (s.src !== "nces") return;
+      const r = byFull[s.b] || (byLast6[s.b.slice(-6)] || []).length === 1 && byLast6[s.b.slice(-6)][0];
+      if (!r) return;
+      s.e = r.TOTAL > 0 ? r.TOTAL : s.e;
+      s.y = r.LATCOD;
+      s.x = r.LONCOD;
+    });
+    render();
+    els.status.textContent = "Locations refreshed live from the NCES API.";
+  } catch (e) {
+    els.status.textContent = "Showing saved location data (NCES API unavailable).";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+refreshFromNces();
+</script>
+</body>
+</html>
